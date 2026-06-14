@@ -7,9 +7,27 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-# Initialize API clients
-openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-anthropic_client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+# Initialize API clients (lazy load to allow startup without keys)
+openai_client = None
+anthropic_client = None
+
+def get_openai_client():
+    global openai_client
+    if openai_client is None:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set in .env")
+        openai_client = OpenAI(api_key=api_key)
+    return openai_client
+
+def get_anthropic_client():
+    global anthropic_client
+    if anthropic_client is None:
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set in .env")
+        anthropic_client = Anthropic(api_key=api_key)
+    return anthropic_client
 
 
 async def process_tour_input(job_id: str, job_data: dict) -> tuple:
@@ -53,7 +71,7 @@ async def transcribe_voice(voice_file_path: str) -> str:
     """Transcribe voice file to text using OpenAI Whisper"""
     try:
         with open(voice_file_path, 'rb') as audio_file:
-            response = openai_client.audio.transcriptions.create(
+            response = get_openai_client().audio.transcriptions.create(
                 model='whisper-1',
                 file=audio_file,
                 language='de'  # German
@@ -156,7 +174,7 @@ async def rewrite_with_claude(transcription: str, route_stats: dict) -> str:
     """
 
     try:
-        message = anthropic_client.messages.create(
+        message = get_anthropic_client().messages.create(
             model='claude-opus-4-1',
             max_tokens=1024,
             messages=[
@@ -180,7 +198,7 @@ async def generate_title(transcription: str, route_stats: dict) -> str:
     Return only the title, nothing else."""
 
     try:
-        message = anthropic_client.messages.create(
+        message = get_anthropic_client().messages.create(
             model='claude-opus-4-1',
             max_tokens=100,
             messages=[
