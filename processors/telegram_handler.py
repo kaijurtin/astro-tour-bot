@@ -31,23 +31,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current_job = context.user_data['current_job']
 
-    # Handle voice message
-    if message.voice:
-        try:
-            voice_file = await context.bot.get_file(message.voice.file_id)
-            voice_path = f'{PENDING_DIR}/voice_{user_id}_{datetime.now().timestamp()}.ogg'
-            await voice_file.download_to_drive(voice_path)
-            current_job['voice'] = voice_path
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text='✅ Voice message received!'
-            )
-        except Exception as e:
-            logger.error(f'Voice download error: {e}')
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f'❌ Error downloading voice: {e}'
-            )
+    # Handle text message (description of the day)
+    if message.text and not message.text.startswith('/'):
+        current_job['transcription'] = message.text
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text='✅ Day notes received! Send photos and GPX next.'
+        )
 
     # Handle photos
     elif message.photo:
@@ -93,33 +83,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Handle /done command to finalize
     elif message.text == '/done':
-        if current_job['voice'] and current_job['photos'] and current_job['gpx']:
+        if current_job.get('transcription') and current_job['photos'] and current_job['gpx']:
             await finalize_job(context, current_job)
         else:
             missing = []
-            if not current_job['voice']:
-                missing.append('voice')
+            if not current_job.get('transcription'):
+                missing.append('day notes (text)')
             if not current_job['photos']:
                 missing.append('photos')
             if not current_job['gpx']:
-                missing.append('route')
+                missing.append('route (GPX)')
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f'⚠️ Missing: {", ".join(missing)}\n\nPlease send all files before /done'
+                text=f'⚠️ Missing: {", ".join(missing)}\n\nSend: text message → photos → GPX → /done'
             )
 
     # Help command
     elif message.text == '/start' or message.text == '/help':
         help_text = '''🚴 **Bicycle Tour Blog Bot**
 
-Send:
-1. 🎤 Voice message (describe your day)
-2. 📸 Photos (your photos)
-3. 🗺️ GPX file (your route)
+**Daily entry process:**
 
-Then type `/done` to submit!
+1. 📝 Send a text message with your day's notes
+2. 📸 Send your photos
+3. 🗺️ Send your GPX route file
+4. Type `/done` to submit!
 
-I'll create your blog entry automatically.
+I'll rewrite your notes into a beautiful blog entry using AI.
+
+**Example:**
+"Started early, beautiful weather, 45km to La Roche, great campground with river"
         '''
         await context.bot.send_message(
             chat_id=chat_id,

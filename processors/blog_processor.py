@@ -2,7 +2,6 @@ import os
 import logging
 from datetime import datetime
 import gpxpy
-import whisper
 import requests
 import json
 
@@ -11,17 +10,6 @@ logger = logging.getLogger(__name__)
 # Ollama endpoint
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://192.168.178.214:11434')
 OLLAMA_MODEL = 'qwen2.5:7b-instruct-q4_K_M'
-
-# Load Whisper model once at startup
-whisper_model = None
-
-def get_whisper_model():
-    global whisper_model
-    if whisper_model is None:
-        logger.info('Loading Whisper model (first time only)...')
-        whisper_model = whisper.load_model('base')
-        logger.info('Whisper model loaded')
-    return whisper_model
 
 def call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
     """Call Ollama API for text generation"""
@@ -34,7 +22,7 @@ def call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
                 'stream': False,
                 'temperature': 0.7
             },
-            timeout=60
+            timeout=120
         )
         response.raise_for_status()
         return response.json()['response']
@@ -45,24 +33,23 @@ def call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
 
 async def process_tour_input(job_id: str, job_data: dict) -> tuple:
     """
-    Process voice input into a blog entry:
-    1. Transcribe voice with Whisper
+    Process text input into a blog entry:
+    1. Use text notes from user
     2. Parse GPX for route data
-    3. Rewrite with Claude (in user's voice)
+    3. Rewrite with Ollama (in user's voice)
     4. Generate blog title
     """
     try:
-        # Step 1: Transcribe voice
-        logger.info(f'[{job_id}] Transcribing voice...')
-        transcription = await transcribe_voice(job_data['voice'])
-        logger.info(f'[{job_id}] Transcription complete: {len(transcription)} chars')
+        # Get text notes (already transcribed by user)
+        transcription = job_data.get('transcription', '')
+        logger.info(f'[{job_id}] Processing notes: {len(transcription)} chars')
 
-        # Step 2: Parse GPX for route stats
+        # Step 1: Parse GPX for route stats
         logger.info(f'[{job_id}] Parsing GPX...')
         route_stats = parse_gpx(job_data['gpx'])
         logger.info(f'[{job_id}] Route stats: {route_stats}')
 
-        # Step 3: Rewrite with Ollama (matching Belgium tour style)
+        # Step 2: Rewrite with Ollama (matching Belgium tour style)
         logger.info(f'[{job_id}] Rewriting with Ollama...')
         blog_content = await rewrite_with_ollama(
             transcription=transcription,
@@ -70,25 +57,13 @@ async def process_tour_input(job_id: str, job_data: dict) -> tuple:
         )
         logger.info(f'[{job_id}] Rewrite complete: {len(blog_content)} chars')
 
-        # Step 4: Generate title
+        # Step 3: Generate title
         blog_title = await generate_title(transcription, route_stats)
 
         return blog_content, blog_title
 
     except Exception as e:
         logger.error(f'[{job_id}] Processing error: {e}')
-        raise
-
-
-async def transcribe_voice(voice_file_path: str) -> str:
-    """Transcribe voice file to text using local Whisper"""
-    try:
-        logger.info(f'Transcribing: {voice_file_path}')
-        model = get_whisper_model()
-        result = model.transcribe(voice_file_path, language='de')
-        return result['text']
-    except Exception as e:
-        logger.error(f'Transcription error: {e}')
         raise
 
 
