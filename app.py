@@ -1,26 +1,19 @@
 import os
-import json
-import sqlite3
-import hashlib
-from datetime import datetime
-from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, ContextTypes
+import asyncio
 import logging
+from datetime import datetime
+from telegram.ext import Application
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 from processors.telegram_handler import handle_message, handle_callback
-from processors.blog_processor import process_tour_input
-from database import init_db, get_db
+from database import init_db
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-
 # Config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://jurtin.de/tour-bot/webhook')
 UPLOADS_DIR = os.getenv('UPLOADS_DIR', '/mnt/nas/tour-inputs')
 ASTRO_REPO = os.getenv('ASTRO_REPO', '/opt/astro')
 
@@ -32,70 +25,36 @@ os.makedirs(f'{UPLOADS_DIR}/processed', exist_ok=True)
 # Initialize database
 init_db()
 
-# Initialize Telegram bot (lazy load to allow startup without token)
-telegram_app = None
 
-def get_telegram_app():
-    global telegram_app
-    if telegram_app is None:
-        if not TELEGRAM_TOKEN or 'your_' in TELEGRAM_TOKEN:
-            logger.warning('TELEGRAM_TOKEN not properly configured')
-            raise ValueError("TELEGRAM_TOKEN not set in .env")
-        telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-    return telegram_app
+async def main():
+    """Start the bot using polling"""
+    if not TELEGRAM_TOKEN or 'your_' in TELEGRAM_TOKEN:
+        logger.error('TELEGRAM_TOKEN not properly configured')
+        raise ValueError("TELEGRAM_TOKEN not set in .env")
 
+    logger.info('Starting Tour Bot with polling...')
 
-@app.route('/tour-bot/webhook', methods=['POST'])
-def telegram_webhook():
-    """Handle incoming Telegram updates"""
-    try:
-        update_data = request.get_json()
-        bot = get_telegram_app().bot
-        update = Update.de_json(update_data, bot)
+    # Build application
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-        # Handle message or callback query
-        if update.message:
-            handle_message(update, telegram_app)
-        elif update.callback_query:
-            handle_callback(update, telegram_app)
+    # Add handlers
+    from telegram.ext import MessageHandler, CallbackQueryHandler, filters
 
-        return jsonify({'status': 'ok'}), 200
-    except Exception as e:
-        logger.error(f'Webhook error: {e}')
-        return jsonify({'error': str(e)}), 500
+    # Handle all messages
+    async def message_handler(update: Update, context):
+        await handle_message(update, application)
 
+    # Handle callback queries
+    async def callback_handler(update: Update, context):
+        await handle_callback(update, application)
 
-@app.route('/tour-bot/status', methods=['GET'])
-def status():
-    """Health check"""
-    return jsonify({
-        'status': 'running',
-        'bot': 'KaiKiste_bot',
-        'timestamp': datetime.now().isoformat()
-    })
+    application.add_handler(MessageHandler(filters.ALL, message_handler))
+    application.add_handler(CallbackQueryHandler(callback_handler))
 
-
-@app.route('/tour-bot/jobs', methods=['GET'])
-def list_jobs():
-    """List pending/processed jobs"""
-    db = get_db()
-    cursor = db.cursor()
-
-    pending = cursor.execute(
-        'SELECT id, created_at, status FROM jobs WHERE status = ? ORDER BY created_at DESC',
-        ('pending',)
-    ).fetchall()
-
-    processed = cursor.execute(
-        'SELECT id, created_at, status FROM jobs WHERE status = ? ORDER BY created_at DESC LIMIT 10',
-        ('published',)
-    ).fetchall()
-
-    return jsonify({
-        'pending': [dict(row) for row in pending],
-        'recent': [dict(row) for row in processed]
-    })
+    # Start polling
+    logger.info('Bot polling started. Listening for messages...')
+    await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    asyncio.run(main())

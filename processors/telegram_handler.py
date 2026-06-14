@@ -18,14 +18,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.from_user.id
     chat_id = message.chat_id
 
-    # Start collecting files for this job
-    if not hasattr(context.user_data, 'current_job'):
+    # Initialize user data if needed
+    if 'current_job' not in context.user_data:
         context.user_data['current_job'] = {
             'user_id': user_id,
             'chat_id': chat_id,
             'voice': None,
             'photos': [],
             'gpx': None,
+            'transcription': None,
             'started_at': datetime.now()
         }
 
