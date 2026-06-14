@@ -5,4 +5,3 @@ openai-whisper==20240930
 gpxpy==1.6.2
 requests==2.31.0
 python-dotenv==1.0.0
-torch==2.1.2
