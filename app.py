@@ -1,10 +1,9 @@
 import os
-import asyncio
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram.ext import Application
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters
+from telegram import Update
 
 from processors.telegram_handler import handle_message, handle_callback
 from database import init_db
@@ -30,7 +29,7 @@ os.makedirs(f'{UPLOADS_DIR}/processed', exist_ok=True)
 init_db()
 
 
-async def main():
+def main():
     """Start the bot using polling"""
     if not TELEGRAM_TOKEN or 'your_' in TELEGRAM_TOKEN:
         logger.error('TELEGRAM_TOKEN not properly configured')
@@ -42,15 +41,13 @@ async def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Add handlers
-    from telegram.ext import MessageHandler, CallbackQueryHandler, filters
-
     application.add_handler(MessageHandler(filters.ALL, handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback))
 
     # Start polling
     logger.info('Bot polling started. Listening for messages...')
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
