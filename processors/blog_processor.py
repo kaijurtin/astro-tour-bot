@@ -7,8 +7,8 @@ import json
 
 logger = logging.getLogger(__name__)
 
-# Ollama endpoint
-OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://192.168.178.214:11434')
+# Ollama endpoint (CT 114)
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://192.168.178.140:11434')
 OLLAMA_MODEL = 'qwen2.5:7b-instruct-q4_K_M'
 
 def call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
