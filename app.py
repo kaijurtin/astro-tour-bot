@@ -32,8 +32,17 @@ os.makedirs(f'{UPLOADS_DIR}/processed', exist_ok=True)
 # Initialize database
 init_db()
 
-# Initialize Telegram bot
-telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+# Initialize Telegram bot (lazy load to allow startup without token)
+telegram_app = None
+
+def get_telegram_app():
+    global telegram_app
+    if telegram_app is None:
+        if not TELEGRAM_TOKEN or 'your_' in TELEGRAM_TOKEN:
+            logger.warning('TELEGRAM_TOKEN not properly configured')
+            raise ValueError("TELEGRAM_TOKEN not set in .env")
+        telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    return telegram_app
 
 
 @app.route('/tour-bot/webhook', methods=['POST'])
@@ -41,7 +50,8 @@ def telegram_webhook():
     """Handle incoming Telegram updates"""
     try:
         update_data = request.get_json()
-        update = Update.de_json(update_data, telegram_app.bot)
+        bot = get_telegram_app().bot
+        update = Update.de_json(update_data, bot)
 
         # Handle message or callback query
         if update.message:
