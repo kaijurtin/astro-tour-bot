@@ -44,16 +44,8 @@ async def main():
     # Add handlers
     from telegram.ext import MessageHandler, CallbackQueryHandler, filters
 
-    # Handle all messages
-    async def message_handler(update: Update, context):
-        await handle_message(update, application)
-
-    # Handle callback queries
-    async def callback_handler(update: Update, context):
-        await handle_callback(update, application)
-
-    application.add_handler(MessageHandler(filters.ALL, message_handler))
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(MessageHandler(filters.ALL, handle_message))
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
     # Start polling
     logger.info('Bot polling started. Listening for messages...')

@@ -5,6 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from database import create_job, update_job, get_job
 from processors.blog_processor import process_tour_input
+from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -190,13 +191,15 @@ Ready to publish?
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle approval/rejection callbacks"""
     query = update.callback_query
+    await query.answer()  # Acknowledge the callback
+
     user_id = query.from_user.id
     chat_id = query.message.chat_id
 
     if query.data.startswith('approve_'):
         job_id = query.data.replace('approve_', '')
         await approve_and_publish(context, job_id, chat_id)
-        await query.answer('✅ Blog published!', show_alert=True)
+        await query.edit_message_text(text='✅ Blog published!')
 
     elif query.data.startswith('reject_'):
         job_id = query.data.replace('reject_', '')
@@ -204,7 +207,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=chat_id,
             text='Noted. Please send your next day\'s content to retry. /help for instructions.'
         )
-        await query.answer('Rejected', show_alert=False)
+        await query.edit_message_text(text='❌ Rejected')
 
 
 async def approve_and_publish(context: ContextTypes.DEFAULT_TYPE, job_id: str, chat_id: int):
