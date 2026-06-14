@@ -2,11 +2,15 @@ import os
 import asyncio
 import logging
 from datetime import datetime
+from dotenv import load_dotenv
 from telegram.ext import Application
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 from processors.telegram_handler import handle_message, handle_callback
 from database import init_db
+
+# Load environment variables first
+load_dotenv()
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
