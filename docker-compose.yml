@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  tour-bot:
+    build: .
+    container_name: tour-bot
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      WEBHOOK_URL: ${WEBHOOK_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      UPLOADS_DIR: /data/uploads
+      DB_PATH: /data/tour-bot.db
+      ASTRO_REPO: /opt/astro
+    volumes:
+      - tour-bot-data:/data
+      - /mnt/nas/tour-inputs:/mnt/nas/tour-inputs
+      - /opt/astro:/opt/astro
+      - ${HOME}/.ssh:/root/.ssh:ro
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    networks:
+      - astro-net
+
+volumes:
+  tour-bot-data:
+
+networks:
+  astro-net:
+    external: true
