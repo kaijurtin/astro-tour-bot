@@ -1,11 +1,10 @@
 import os
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
 from database import create_job, update_job, get_job
 from processors.blog_processor import process_tour_input
-from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text='ℹ️ Please send GPX files only for routes.'
             )
 
-    # Handle /done command to finalize
+    # Handle /done command to finalize and auto-publish
     elif message.text == '/done':
         if current_job.get('transcription') and current_job['photos'] and current_job['gpx']:
             await finalize_job(context, current_job)
@@ -111,7 +110,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. 🗺️ Send your GPX route file
 4. Type `/done` to submit!
 
-I'll rewrite your notes into a beautiful blog entry using AI.
+Your entry will be published immediately with a 30-minute edit window.
 
 **Example:**
 "Started early, beautiful weather, 45km to La Roche, great campground with river"
@@ -125,16 +124,15 @@ I'll rewrite your notes into a beautiful blog entry using AI.
     else:
         await context.bot.send_message(
             chat_id=chat_id,
-            text='Send voice message, photos, or GPX file. Type /help for instructions.'
+            text='Send your day notes (text), photos, and GPX file. Type /help for instructions.'
         )
 
 
 async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data):
-    """Create job and start processing"""
+    """Process and immediately auto-publish blog entry with edit window"""
     try:
         job_id = create_job(
             user_id=job_data['user_id'],
-            voice_file=job_data['voice'],
             photos=job_data['photos'],
             gpx_file=job_data['gpx']
         )
@@ -143,38 +141,44 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data):
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text='⏳ Processing your blog entry...'
+            text='⏳ Processing and publishing...'
         )
 
-        # Process the job (transcription + rewriting)
-        blog_content, blog_title = await process_tour_input(job_id, job_data)
+        # Process the raw entry (no Ollama rewriting, just transcription + GPX stats)
+        entry_data = await process_tour_input(job_id, job_data)
 
         # Store in database
-        update_job(job_id, transcription=blog_content, status='preview')
+        update_job(
+            job_id,
+            transcription=entry_data['transcript'],
+            title=entry_data['title'],
+            route_stats=entry_data.get('route_stats'),
+            status='auto-published',
+            auto_published_at=entry_data['auto_published_at'],
+            edit_window_expires=entry_data['edit_window_expires']
+        )
 
-        # Send preview with approval buttons
-        preview_text = f'''
-**Blog Preview:**
+        # Generate entry URL
+        entry_slug = f"day-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        entry_url = f"https://jurtin.de/blog/tour/{entry_slug}"
 
-**{blog_title}**
+        # Send auto-publish confirmation with edit window info
+        publish_message = f'''✅ **Published!**
 
-{blog_content[:500]}...
+**{entry_data['title']}**
 
-Ready to publish?
+🔗 {entry_url}
+
+📝 Edit window: **30 minutes remaining**
+You can still edit the entry for the next 30 minutes.
+
+When the edit window closes, the entry will be finalized.
         '''
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton('✅ Approve & Publish', callback_data=f'approve_{job_id}'),
-                InlineKeyboardButton('❌ Edit/Reject', callback_data=f'reject_{job_id}')
-            ]
-        ])
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=preview_text,
-            parse_mode='Markdown',
-            reply_markup=keyboard
+            text=publish_message,
+            parse_mode='Markdown'
         )
 
         # Clear current job
@@ -189,44 +193,9 @@ Ready to publish?
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle approval/rejection callbacks"""
+    """Handle any callback queries (edit window actions, etc.)"""
     query = update.callback_query
     await query.answer()  # Acknowledge the callback
 
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-
-    if query.data.startswith('approve_'):
-        job_id = query.data.replace('approve_', '')
-        await approve_and_publish(context, job_id, chat_id)
-        await query.edit_message_text(text='✅ Blog published!')
-
-    elif query.data.startswith('reject_'):
-        job_id = query.data.replace('reject_', '')
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text='Noted. Please send your next day\'s content to retry. /help for instructions.'
-        )
-        await query.edit_message_text(text='❌ Rejected')
-
-
-async def approve_and_publish(context: ContextTypes.DEFAULT_TYPE, job_id: str, chat_id: int):
-    """Publish blog entry"""
-    from processors.blog_publisher import publish_blog_entry
-
-    try:
-        job = get_job(job_id)
-        # Publish to Astro blog
-        await publish_blog_entry(job_id, job)
-        update_job(job_id, status='published')
-
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text='🎉 Your blog entry has been published!\n\nhttps://jurtin.de/blog/'
-        )
-    except Exception as e:
-        logger.error(f'Publishing error: {e}')
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f'❌ Publishing error: {e}'
-        )
+    # Future: add edit/close window callbacks here if needed
+    pass

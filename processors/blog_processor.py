@@ -1,66 +1,54 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import gpxpy
-import requests
 import json
 
 logger = logging.getLogger(__name__)
 
-# Ollama endpoint (CT 114)
-OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://192.168.178.140:11434')
-OLLAMA_MODEL = 'qwen2.5:7b-instruct-q4_K_M'
 
-def call_ollama(prompt: str, model: str = OLLAMA_MODEL) -> str:
-    """Call Ollama API for text generation"""
-    try:
-        response = requests.post(
-            f'{OLLAMA_HOST}/api/generate',
-            json={
-                'model': model,
-                'prompt': prompt,
-                'stream': False,
-                'temperature': 0.7
-            },
-            timeout=120
-        )
-        response.raise_for_status()
-        return response.json()['response']
-    except Exception as e:
-        logger.error(f'Ollama error: {e}')
-        raise
-
-
-async def process_tour_input(job_id: str, job_data: dict) -> tuple:
+async def process_tour_input(job_id: str, job_data: dict) -> dict:
     """
-    Process text input into a blog entry:
-    1. Use text notes from user
+    Process voice/text input into a blog entry (raw telegraphic format):
+    1. Use raw transcription from Whisper (no rewriting)
     2. Parse GPX for route data
-    3. Rewrite with Ollama (in user's voice)
-    4. Generate blog title
+    3. Generate simple title from transcript or default
+    4. Return entry data for immediate auto-publish
     """
     try:
-        # Get text notes (already transcribed by user)
-        transcription = job_data.get('transcription', '')
-        logger.info(f'[{job_id}] Processing notes: {len(transcription)} chars')
+        # Get raw transcription
+        transcription = job_data.get('transcription', '').strip()
+        if not transcription:
+            logger.error(f'[{job_id}] Empty transcription')
+            raise ValueError('No transcription provided')
 
-        # Step 1: Parse GPX for route stats
-        logger.info(f'[{job_id}] Parsing GPX...')
-        route_stats = parse_gpx(job_data['gpx'])
-        logger.info(f'[{job_id}] Route stats: {route_stats}')
+        logger.info(f'[{job_id}] Processing raw entry: {len(transcription)} chars')
 
-        # Step 2: Rewrite with Ollama (matching Belgium tour style)
-        logger.info(f'[{job_id}] Rewriting with Ollama...')
-        blog_content = await rewrite_with_ollama(
-            transcription=transcription,
-            route_stats=route_stats
-        )
-        logger.info(f'[{job_id}] Rewrite complete: {len(blog_content)} chars')
+        # Parse GPX for route stats
+        route_stats = None
+        if 'gpx' in job_data:
+            logger.info(f'[{job_id}] Parsing GPX...')
+            route_stats = parse_gpx(job_data['gpx'])
+            logger.info(f'[{job_id}] Route stats: {route_stats}')
 
-        # Step 3: Generate title
-        blog_title = await generate_title(transcription, route_stats)
+        # Generate simple title from first line or default
+        title = generate_simple_title(transcription, route_stats)
+        logger.info(f'[{job_id}] Title: {title}')
 
-        return blog_content, blog_title
+        # Calculate edit window (30 minutes from now)
+        auto_published_at = datetime.now().isoformat()
+        edit_window_expires = (datetime.now() + timedelta(minutes=30)).isoformat()
+
+        # Return entry data ready for publication
+        return {
+            'title': title,
+            'transcript': transcription,
+            'route_stats': route_stats,
+            'auto_published_at': auto_published_at,
+            'edit_window_expires': edit_window_expires,
+            'is_auto_published': True,
+            'gpx_path': job_data.get('gpx'),
+        }
 
     except Exception as e:
         logger.error(f'[{job_id}] Processing error: {e}')
@@ -90,9 +78,11 @@ def parse_gpx(gpx_file_path: str) -> dict:
                         else:
                             elevation_loss += abs(diff)
 
-        # Get start/end points
+        # Get start/end points and calculate avg speed
         start_point = None
         end_point = None
+        duration_minutes = 0
+
         if gpx.tracks:
             first_track = gpx.tracks[0]
             if first_track.segments:
@@ -101,82 +91,66 @@ def parse_gpx(gpx_file_path: str) -> dict:
                     start_point = first_segment.points[0]
                     end_point = first_segment.points[-1]
 
+                    # Calculate duration
+                    if start_point.time and end_point.time:
+                        duration = end_point.time - start_point.time
+                        duration_minutes = duration.total_seconds() / 60
+
+        # Calculate average speed
+        avg_speed = None
+        if duration_minutes > 0:
+            avg_speed = round((distance_km / (duration_minutes / 60)), 1)
+
         return {
             'distance_km': round(distance_km, 1),
             'elevation_gain_m': round(elevation_gain),
             'elevation_loss_m': round(elevation_loss),
+            'avg_speed_kmh': avg_speed,
             'start_point': (start_point.latitude, start_point.longitude) if start_point else None,
             'end_point': (end_point.latitude, end_point.longitude) if end_point else None,
             'gpx_path': gpx_file_path
         }
     except Exception as e:
         logger.error(f'GPX parsing error: {e}')
-        raise
+        # Return empty stats rather than failing
+        return {
+            'distance_km': 0,
+            'elevation_gain_m': 0,
+            'elevation_loss_m': 0,
+            'avg_speed_kmh': None,
+            'start_point': None,
+            'end_point': None,
+            'gpx_path': gpx_file_path
+        }
 
 
-async def rewrite_with_ollama(transcription: str, route_stats: dict) -> str:
+def generate_simple_title(transcription: str, route_stats: dict = None) -> str:
     """
-    Rewrite voice transcription into a polished blog entry using Ollama
-    Matches Belgium tour voice style
+    Generate a simple title from transcript or route data.
+    Follows pattern: "Tour Day N — Location" or "Etappe — Date"
     """
-
-    style_context = """Du bist ein erfahrener Reiseblogger, der Fahrradtouren dokumentiert.
-    Schreibe im Stil der bestehenden Belgien-Touren-Einträge:
-
-    - Persönlich, Ich-Perspektive
-    - Mischung aus praktischen Details und emotionalen Reflexionen
-    - Lockerer Ton mit Humor und Selbstironie ("Eieiei", "Und los geht's!")
-    - Beobachtungen zur Landschaft
-    - Herausforderungs-Lösungs-Ansatz
-    - Ellipsen (...) für Nachdruck
-    - Ausrufezeichen für Überraschung
-    - Spezifische Details (Essen, Orte, Begegnungen)
-    - Wetterbeschreibungen
-    - Körperliche Empfindungen
-    - Reflexion über Erfolge und Lernen
-
-    Schreibe 400-600 Wörter, natürlich und lesbar.
-    Beginne mit einem ansprechenden Hook.
-    Integriere die Route-Statistiken natürlich in den Text.
-    """
-
-    route_info = f"""Routen-Statistiken:
-- Distanz: {route_stats['distance_km']} km
-- Höhenmeter: {route_stats['elevation_gain_m']} m
-- Abstieg: {route_stats['elevation_loss_m']} m"""
-
-    prompt = f"""{style_context}
-
-Rohe Transkription:
-{transcription}
-
-{route_info}
-
-Schreibe jetzt einen polierte Blog-Eintrag basierend auf dieser Transkription.
-Behalte die authentische Stimme bei und verbessere Klarheit und Fluss."""
-
     try:
-        logger.info('Rewriting with Ollama...')
-        response = call_ollama(prompt)
-        return response
-    except Exception as e:
-        logger.error(f'Ollama rewrite error: {e}')
-        raise
+        # Extract first sentence for hint (max 40 chars)
+        first_line = transcription.split('\n')[0].strip()
+        if first_line and len(first_line) < 80:
+            # Use first line if it's short enough
+            if first_line.endswith('.'):
+                title_hint = first_line[:-1]
+            else:
+                title_hint = first_line
+        else:
+            title_hint = None
 
+        # Build title from available data
+        date_str = datetime.now().strftime('%d.%m.%Y')
 
-async def generate_title(transcription: str, route_stats: dict) -> str:
-    """Generate blog entry title using Ollama"""
-    prompt = f"""Basierend auf dieser Zusammenfassung und den Routen-Statistiken,
-    erzeuge einen kurzen, ansprechenden deutschen Blog-Titel (5-8 Wörter).
+        if title_hint:
+            return f"{title_hint} — {date_str}"
+        elif route_stats and route_stats.get('distance_km'):
+            return f"Etappe {date_str} — {route_stats['distance_km']} km"
+        else:
+            return f"Tour Entry {date_str}"
 
-    Zusammenfassung: {transcription[:200]}...
-    Distanz: {route_stats['distance_km']} km
-
-    Gib nur den Titel zurück, sonst nichts."""
-
-    try:
-        response = call_ollama(prompt)
-        return response.strip()
     except Exception as e:
         logger.error(f'Title generation error: {e}')
-        return f"Bikepacking Etappe {datetime.now().strftime('%d.%m.%Y')}"
+        return f"Tour Entry {datetime.now().strftime('%d.%m.%Y')}"
