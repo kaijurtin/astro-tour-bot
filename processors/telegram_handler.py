@@ -130,6 +130,8 @@ Your entry will be published immediately with a 30-minute edit window.
 
 async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data):
     """Process and immediately auto-publish blog entry with edit window"""
+    from processors.blog_publisher import publish_blog_entry
+
     try:
         job_id = create_job(
             user_id=job_data['user_id'],
@@ -148,6 +150,18 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data):
         entry_data = await process_tour_input(job_id, job_data)
 
         # Store in database
+        job_record = {
+            'id': job_id,
+            'transcription': entry_data['transcript'],
+            'title': entry_data['title'],
+            'route_stats': entry_data.get('route_stats'),
+            'status': 'auto-published',
+            'auto_published_at': entry_data['auto_published_at'],
+            'edit_window_expires': entry_data['edit_window_expires'],
+            'photos': ','.join(job_data.get('photos', [])),
+            'gpx_file': job_data.get('gpx')
+        }
+
         update_job(
             job_id,
             transcription=entry_data['transcript'],
@@ -158,9 +172,12 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data):
             edit_window_expires=entry_data['edit_window_expires']
         )
 
+        # Publish to Astro blog
+        await publish_blog_entry(job_id, job_record)
+
         # Generate entry URL
-        entry_slug = f"day-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        entry_url = f"https://jurtin.de/blog/tour/{entry_slug}"
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        entry_url = f"https://jurtin.de/blog/"
 
         # Send auto-publish confirmation with edit window info
         publish_message = f'''✅ **Published!**
