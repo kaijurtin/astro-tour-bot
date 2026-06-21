@@ -22,9 +22,26 @@ def init_db():
             gpx_file TEXT,
             transcription TEXT,
             blog_content TEXT,
-            blog_file TEXT
+            blog_file TEXT,
+            title TEXT,
+            route_stats TEXT,
+            location TEXT,
+            auto_published_at TEXT,
+            edit_window_expires TEXT
         )
     ''')
+
+    # Migrate existing databases that predate these columns
+    existing = {row[1] for row in cursor.execute("PRAGMA table_info(jobs)").fetchall()}
+    for col, typedef in [
+        ('title', 'TEXT'),
+        ('route_stats', 'TEXT'),
+        ('location', 'TEXT'),
+        ('auto_published_at', 'TEXT'),
+        ('edit_window_expires', 'TEXT'),
+    ]:
+        if col not in existing:
+            cursor.execute(f'ALTER TABLE jobs ADD COLUMN {col} {typedef}')
 
     # Approvals table
     cursor.execute('''
