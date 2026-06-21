@@ -1,176 +1,105 @@
 import os
 import logging
-import subprocess
 from datetime import datetime
 import json
-from pathlib import Path
 import shutil
 
 logger = logging.getLogger(__name__)
 
+# NAS drop folder — Mac picks these up and deploys
+NAS_OUTBOX = os.getenv('NAS_OUTBOX', '/mnt/nas/tour-inputs/outbox')
 ASTRO_REPO = os.getenv('ASTRO_REPO', '/opt/astro')
-BLOG_DIR = f'{ASTRO_REPO}/src/content/blog'
 
 
-async def publish_blog_entry(job_id: str, job: dict):
+async def publish_blog_entry(job_id: str, job: dict) -> str:
     """
-    Publish blog entry to Astro site:
-    1. Create markdown file with raw telegraphic format
-    2. Copy photos to public directory
-    3. Commit to git
-    4. Trigger build and deploy
+    Write blog entry files to the NAS outbox.
+    Returns the markdown filename so the caller can report it.
+
+    Deploy flow (runs on Mac, not CT 115):
+      1. rsync /mnt/nas/tour-inputs/outbox/ → /Users/kaijurtin/repos/jurtin-astro/
+      2. npm run build
+      3. bash /tmp/sftp_upload.sh
     """
-    try:
-        logger.info(f'[{job_id}] Publishing blog entry...')
+    logger.info(f'[{job_id}] Writing blog entry to outbox...')
 
-        # Generate filename (tour-etappe-YYYY-MM-DD-HHmmss)
-        now = datetime.now()
-        date_str = now.strftime('%Y-%m-%d')
-        time_str = now.strftime('%H%M%S')
-        filename = f'tour-{date_str}-{time_str}.md'
-        filepath = f'{BLOG_DIR}/{filename}'
+    now = datetime.now()
+    date_str = now.strftime('%Y-%m-%d')
+    time_str = now.strftime('%H%M%S')
+    filename = f'tour-{date_str}-{time_str}.md'
 
-        # Parse route stats
-        route_stats = job.get('route_stats', {})
-        photos_list = job.get('photos', '').split(',') if job.get('photos') else []
-        hero_image = photos_list[0] if photos_list else '/images/blog/default.jpg'
+    # Parse route_stats — may arrive as JSON string or dict
+    route_stats = job.get('route_stats') or {}
+    if isinstance(route_stats, str):
+        try:
+            route_stats = json.loads(route_stats)
+        except Exception:
+            route_stats = {}
 
-        # Build photo references for markdown
-        photo_refs = []
-        if photos_list:
-            for i, photo in enumerate(photos_list):
-                # Convert path to URL
-                photo_url = photo.replace(ASTRO_REPO, '').replace('/public', '')
-                photo_refs.append(photo_url)
+    # Build photo public URLs after copying
+    photos_src = [p for p in (job.get('photos') or '').split(',') if p]
+    photo_urls = _copy_photos(photos_src, job_id, now)
+    hero_image = photo_urls[0] if photo_urls else ''
 
-        # Create frontmatter for new telegraphic blog format
-        frontmatter = {
-            'title': job.get('title', f'Tour Entry {date_str}'),
-            'date': date_str,
-            'category': 'biketour',
-            'layout': 'DailyEntryLayout',
-            'transcript': job.get('transcription', ''),
-            'location': job.get('location', ''),
-            'distance': route_stats.get('distance_km', 0),
-            'elevation_gain': route_stats.get('elevation_gain_m', 0),
-            'elevation_loss': route_stats.get('elevation_loss_m', 0),
-            'avg_speed': route_stats.get('avg_speed_kmh'),
-            'photos': photo_refs,
-            'heroImage': hero_image,
-            'isAutoPublished': True,
-            'editWindowExpires': job.get('edit_window_expires'),
-        }
+    transcript = job.get('transcription', '').strip()
+    title = job.get('title', f'Tour Entry {date_str}')
 
-        # Create markdown content with raw transcript
-        markdown_content = f"""---
-title: "{frontmatter['title']}"
-date: {frontmatter['date']}
-category: {frontmatter['category']}
-layout: {frontmatter['layout']}
-transcript: |
-  {json.dumps(frontmatter['transcript'])}
-location: "{frontmatter['location']}"
-distance: {frontmatter['distance']}
-elevation_gain: {frontmatter['elevation_gain']}
-elevation_loss: {frontmatter['elevation_loss']}
-avg_speed: {frontmatter['avg_speed']}
-heroImage: "{frontmatter['heroImage']}"
-photos:
-{chr(10).join(f'  - "{photo}"' for photo in frontmatter['photos'])}
-isAutoPublished: true
-editWindowExpires: "{frontmatter['editWindowExpires']}"
+    markdown = _build_markdown(
+        title=title,
+        date_str=date_str,
+        transcript=transcript,
+        route_stats=route_stats,
+        photo_urls=photo_urls,
+        hero_image=hero_image,
+        edit_window_expires=job.get('edit_window_expires', ''),
+    )
+
+    # Write markdown to outbox
+    blog_outbox = os.path.join(NAS_OUTBOX, 'src', 'content', 'blog')
+    os.makedirs(blog_outbox, exist_ok=True)
+    filepath = os.path.join(blog_outbox, filename)
+    with open(filepath, 'w') as f:
+        f.write(markdown)
+
+    logger.info(f'[{job_id}] Written: {filepath}')
+    return filename
+
+
+def _copy_photos(src_paths: list, job_id: str, timestamp: datetime) -> list:
+    """Copy photos to NAS outbox public dir, return their web URLs."""
+    year = timestamp.strftime('%Y')
+    month = timestamp.strftime('%m')
+    day = timestamp.strftime('%d')
+
+    dest_dir = os.path.join(NAS_OUTBOX, 'public', 'images', 'tour', year, month, day)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    urls = []
+    for i, src in enumerate(src_paths):
+        if os.path.exists(src):
+            dest = os.path.join(dest_dir, f'photo_{i+1}.jpg')
+            shutil.copy2(src, dest)
+            urls.append(f'/images/tour/{year}/{month}/{day}/photo_{i+1}.jpg')
+            logger.info(f'[{job_id}] Photo copied → {dest}')
+    return urls
+
+
+def _build_markdown(*, title, date_str, transcript, route_stats,
+                    photo_urls, hero_image, edit_window_expires) -> str:
+    photos_yaml = '\n'.join(f'  - "{p}"' for p in photo_urls)
+    return f"""---
+title: "{title}"
+date: {date_str}
+category: testentry
+heroImage: "{hero_image}"
+excerpt: "{transcript[:120].replace('"', "'")}"
+images:
+{photos_yaml if photos_yaml else '  []'}
+distance: {route_stats.get('distance_km', 0)}
+elevation_gain: {route_stats.get('elevation_gain_m', 0)}
+elevation_loss: {route_stats.get('elevation_loss_m', 0)}
+avg_speed: {route_stats.get('avg_speed_kmh', '')}
 ---
 
-{frontmatter['transcript']}
+{transcript}
 """
-
-        # Write markdown file
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w') as f:
-            f.write(markdown_content)
-
-        logger.info(f'[{job_id}] Blog file created: {filepath}')
-
-        # Copy photos to public directory
-        if photos_list:
-            logger.info(f'[{job_id}] Copying photos...')
-            copy_photos_to_public(photos_list, job_id, now)
-
-        # Commit to git
-        logger.info(f'[{job_id}] Committing to git...')
-        commit_to_git(filename, job_id)
-
-        # Trigger build and deploy
-        logger.info(f'[{job_id}] Building and deploying...')
-        build_and_deploy(job_id)
-
-        logger.info(f'[{job_id}] Publishing complete!')
-
-    except Exception as e:
-        logger.error(f'[{job_id}] Publishing error: {e}')
-        raise
-
-
-def copy_photos_to_public(photo_paths: list, job_id: str, timestamp: datetime):
-    """Copy photos to Astro public directory"""
-    try:
-        year = timestamp.strftime('%Y')
-        month = timestamp.strftime('%m')
-        day = timestamp.strftime('%d')
-
-        dest_dir = f'{ASTRO_REPO}/public/images/tour/{year}/{month}/{day}'
-        os.makedirs(dest_dir, exist_ok=True)
-
-        copied_paths = []
-        for i, photo_path in enumerate(photo_paths):
-            if os.path.exists(photo_path):
-                dest_path = f'{dest_dir}/photo_{i+1}.jpg'
-                shutil.copy2(photo_path, dest_path)
-                logger.info(f'[{job_id}] Copied: {photo_path} → {dest_path}')
-                copied_paths.append(dest_path)
-
-        return copied_paths
-
-    except Exception as e:
-        logger.error(f'[{job_id}] Photo copy error: {e}')
-        raise
-
-
-def commit_to_git(filename: str, job_id: str):
-    """Commit blog entry to git"""
-    try:
-        os.chdir(ASTRO_REPO)
-
-        # Add files
-        subprocess.run(['git', 'add', f'src/content/blog/{filename}'], check=True)
-        subprocess.run(['git', 'add', 'public/images/tour/'], check=True)
-
-        # Commit
-        commit_msg = f'feat: add tour blog entry {filename}'
-        subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
-
-        logger.info(f'[{job_id}] Committed to git')
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f'[{job_id}] Git commit error: {e}')
-        raise
-
-
-def build_and_deploy(job_id: str):
-    """Build Astro site and deploy to IONOS"""
-    try:
-        os.chdir(ASTRO_REPO)
-
-        # Build
-        logger.info(f'[{job_id}] Building Astro site...')
-        subprocess.run(['npm', 'run', 'build'], check=True)
-
-        # Deploy (run upload script)
-        logger.info(f'[{job_id}] Deploying to IONOS...')
-        subprocess.run(['bash', '/tmp/sftp_upload.sh'], check=True, timeout=300)
-
-        logger.info(f'[{job_id}] Deployment complete')
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f'[{job_id}] Build/deploy error: {e}')
-        raise
