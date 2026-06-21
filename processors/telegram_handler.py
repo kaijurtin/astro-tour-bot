@@ -18,8 +18,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = message.from_user.id
     chat_id = message.chat_id
 
-    # Initialize user data if needed
-    if 'current_job' not in context.user_data:
+    # Initialize user data if needed (also re-init if previous job was cleared)
+    if 'current_job' not in context.user_data or context.user_data['current_job'] is None:
         context.user_data['current_job'] = {
             'user_id': user_id,
             'chat_id': chat_id,
