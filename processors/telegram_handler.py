@@ -232,11 +232,12 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
             'location': job_data.get('location', '')
         }
 
+        import json as _json
         update_job(
             job_id,
             transcription=entry_data['transcript'],
             title=entry_data['title'],
-            route_stats=entry_data.get('route_stats'),
+            route_stats=_json.dumps(entry_data.get('route_stats')) if entry_data.get('route_stats') else None,
             status='auto-published',
             auto_published_at=entry_data['auto_published_at'],
             edit_window_expires=entry_data['edit_window_expires']
