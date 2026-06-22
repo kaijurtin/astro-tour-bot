@@ -59,6 +59,7 @@ async def publish_blog_entry(job_id: str, job: dict) -> str:
         f.write(_build_markdown(
             title=title,
             date_str=date_str,
+            category=job.get('category', 'testentry'),
             transcript=transcript,
             route_stats=route_stats,
             photo_urls=photo_urls,
@@ -112,14 +113,14 @@ def _git_commit_push(filename: str, job_id: str):
     logger.info(f'[{job_id}] Git pushed')
 
 
-def _build_markdown(*, title, date_str, transcript, route_stats,
+def _build_markdown(*, title, date_str, category, transcript, route_stats,
                     photo_urls, hero_image, edit_window_expires) -> str:
     photos_yaml = '\n'.join(f'  - "{p}"' for p in photo_urls) or '  []'
     excerpt = transcript[:120].replace('"', "'")
     return f"""---
 title: "{title}"
 date: {date_str}
-category: testentry
+category: {category}
 heroImage: "{hero_image}"
 excerpt: "{excerpt}"
 images:

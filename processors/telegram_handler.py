@@ -50,6 +50,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        default_cat = context.user_data.get('default_category', 'testentry')
         context.user_data['current_job'] = {
             'user_id': user_id,
             'chat_id': chat_id,
@@ -57,11 +58,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'audios': [],
             'photos': [],
             'gpx': None,
+            'category': default_cat,
             'started_at': datetime.now().isoformat()
         }
         await context.bot.send_message(
             chat_id=chat_id,
-            text='📖 New entry started!\n\nSend any combination of:\n📝 Text messages\n🎙️ Voice messages\n📸 Photos\n🗺️ GPX file\n\nType /publish when done or /status to see what\'s collected.'
+            text=f'📖 New entry started! Category: *{default_cat}*\n\nSend any combination of:\n📝 Text messages\n🎙️ Voice messages\n📸 Photos\n🗺️ GPX file\n\nChange category: /category <name>\nPublish: /publish',
+            parse_mode='Markdown'
         )
         return
 
@@ -102,6 +105,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data['current_job'] = None
         await context.bot.send_message(chat_id=chat_id, text='🗑️ Entry discarded. Start a new one with /new')
+        return
+
+    if message.text and message.text.startswith('/category'):
+        parts = message.text.split(None, 1)
+        if len(parts) < 2 or not parts[1].strip():
+            current = (context.user_data.get('current_job') or {}).get('category', 'testentry')
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f'📁 Current category: *{current}*\n\nTo change: /category <name>\nExample: /category belgientour',
+                parse_mode='Markdown'
+            )
+            return
+        # Normalise: lowercase, spaces → hyphens
+        new_cat = parts[1].strip().lower().replace(' ', '-')
+        if _has_active_entry(context):
+            context.user_data['current_job']['category'] = new_cat
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f'📁 Category set to *{new_cat}* for this entry.',
+                parse_mode='Markdown'
+            )
+        else:
+            # Set as default for the next /new
+            context.user_data['default_category'] = new_cat
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f'📁 Default category set to *{new_cat}*. Will apply to the next /new entry.',
+                parse_mode='Markdown'
+            )
         return
 
     if message.text in ('/start', '/help'):
