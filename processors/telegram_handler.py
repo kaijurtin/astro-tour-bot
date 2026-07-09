@@ -1,15 +1,25 @@
 import os
 import logging
 from datetime import datetime
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ContextTypes
 from database import create_job, update_job, get_job
 from processors.blog_processor import process_tour_input
 
+# app.py also calls load_dotenv(), but only AFTER importing this module — so
+# ALLOWED_USER_IDS below would otherwise always read as unset. Load here too
+# (idempotent) so this module's env reads are correct regardless of import order.
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = os.getenv('UPLOADS_DIR', '/mnt/nas/tour-inputs')
 PENDING_DIR = f'{UPLOADS_DIR}/pending'
+
+ALLOWED_USER_IDS = {
+    int(uid.strip()) for uid in os.getenv('ALLOWED_USER_IDS', '').split(',') if uid.strip()
+}
 
 
 def _has_active_entry(context) -> bool:
@@ -39,6 +49,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = message.from_user.id
     chat_id = message.chat_id
+
+    if ALLOWED_USER_IDS:
+        if user_id not in ALLOWED_USER_IDS:
+            logger.warning(f'Unauthorized access attempt from user_id={user_id} chat_id={chat_id}')
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text='🚫 This bot is private. You are not authorized to use it.'
+            )
+            return
+    else:
+        logger.info(
+            f'ALLOWED_USER_IDS not configured — message from user_id={user_id}. '
+            f'Add this ID to ALLOWED_USER_IDS in .env to restrict bot access.'
+        )
 
     # ── Commands ──────────────────────────────────────────────────────────────
 
@@ -136,6 +160,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    if message.text == '/golive':
+        await context.bot.send_message(chat_id=chat_id, text='🚀 Promoting staging to production...')
+        try:
+            from processors.blog_publisher import deploy_to_production
+            deploy_to_production()
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text='✅ Live! https://jurtin.de/blog/'
+            )
+        except Exception as e:
+            logger.error(f'Go-live error: {e}')
+            await context.bot.send_message(chat_id=chat_id, text=f'❌ Go-live failed: {e}')
+        return
+
     if message.text in ('/start', '/help'):
         await context.bot.send_message(
             chat_id=chat_id,
@@ -144,8 +182,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 '*Commands:*\n'
                 '/new — start a new blog entry\n'
                 '/status — see what\'s collected so far\n'
-                '/publish — publish the current entry\n'
-                '/cancel — discard the current entry\n\n'
+                '/publish — publish the current entry (to staging)\n'
+                '/cancel — discard the current entry\n'
+                '/golive — promote the current staging build to jurtin.de\n\n'
                 '*While an entry is open, send any of:*\n'
                 '📝 Text messages (your notes)\n'
                 '🎙️ Voice messages\n'
@@ -258,7 +297,6 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
             'route_stats': entry_data.get('route_stats'),
             'status': 'auto-published',
             'auto_published_at': entry_data['auto_published_at'],
-            'edit_window_expires': entry_data['edit_window_expires'],
             'photos': ','.join(job_data.get('photos', [])),
             'gpx_file': job_data.get('gpx'),
             'location': job_data.get('location', '')
@@ -271,8 +309,7 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
             title=entry_data['title'],
             route_stats=_json.dumps(entry_data.get('route_stats')) if entry_data.get('route_stats') else None,
             status='auto-published',
-            auto_published_at=entry_data['auto_published_at'],
-            edit_window_expires=entry_data['edit_window_expires']
+            auto_published_at=entry_data['auto_published_at']
         )
 
         await publish_blog_entry(job_id, job_record)
@@ -284,11 +321,11 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
-                f'✅ *Published!*\n\n'
+                f'✅ *Published to staging!*\n\n'
                 f'*{entry_data["title"]}*\n\n'
                 f'📝 {n_texts} text note(s) · 🎙️ {n_audios} audio(s) · 📸 {n_photos} photo(s)\n\n'
-                f'🔗 https://jurtin.de/blog/\n\n'
-                f'📝 Edit window: *30 minutes remaining*'
+                f'🔗 https://staging.jurtin.de/blog/\n\n'
+                f'Ready to go live? Send /golive'
             ),
             parse_mode='Markdown'
         )

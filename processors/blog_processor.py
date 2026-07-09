@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import gpxpy
 import json
 
@@ -26,7 +26,7 @@ async def process_tour_input(job_id: str, job_data: dict) -> dict:
 
         # Parse GPX for route stats
         route_stats = None
-        if 'gpx' in job_data:
+        if job_data.get('gpx'):
             logger.info(f'[{job_id}] Parsing GPX...')
             route_stats = parse_gpx(job_data['gpx'])
             logger.info(f'[{job_id}] Route stats: {route_stats}')
@@ -35,9 +35,7 @@ async def process_tour_input(job_id: str, job_data: dict) -> dict:
         title = generate_simple_title(transcription, route_stats)
         logger.info(f'[{job_id}] Title: {title}')
 
-        # Calculate edit window (30 minutes from now)
         auto_published_at = datetime.now().isoformat()
-        edit_window_expires = (datetime.now() + timedelta(minutes=30)).isoformat()
 
         # Return entry data ready for publication
         return {
@@ -45,7 +43,6 @@ async def process_tour_input(job_id: str, job_data: dict) -> dict:
             'transcript': transcription,
             'route_stats': route_stats,
             'auto_published_at': auto_published_at,
-            'edit_window_expires': edit_window_expires,
             'is_auto_published': True,
             'gpx_path': job_data.get('gpx'),
         }
