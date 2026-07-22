@@ -299,7 +299,8 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
             'auto_published_at': entry_data['auto_published_at'],
             'photos': ','.join(job_data.get('photos', [])),
             'gpx_file': job_data.get('gpx'),
-            'location': job_data.get('location', '')
+            'location': job_data.get('location', ''),
+            'category': job_data.get('category', 'testentry')
         }
 
         import json as _json
