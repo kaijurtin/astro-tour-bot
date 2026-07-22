@@ -23,7 +23,7 @@ def _npm(args: list, cwd: str):
     subprocess.run(['npm'] + args, cwd=cwd, check=True, env=env)
 
 
-async def publish_blog_entry(job_id: str, job: dict) -> str:
+async def publish_blog_entry(job_id: str, job: dict) -> dict:
     """
     Full pipeline on CT 115:
     1. Write markdown to /opt/astro/src/content/blog/
@@ -91,7 +91,40 @@ async def publish_blog_entry(job_id: str, job: dict) -> str:
     _deploy_staging()
     logger.info(f'[{job_id}] Staging deploy complete')
 
-    return filename
+    return {'filename': filename, 'photo_urls': photo_urls, 'gpx_url': gpx_url}
+
+
+def discard_entry(filename: str, photo_urls: list, gpx_url: str | None, also_production: bool = False) -> None:
+    """
+    Remove a previously published entry: git rm its markdown + photos (+ gpx),
+    commit, push, rebuild, and redeploy to staging (and production if it had
+    already gone live via /golive).
+    """
+    rel_paths = [f'src/content/blog/{filename}']
+    rel_paths += [url.lstrip('/') for url in photo_urls]
+    if gpx_url:
+        rel_paths.append(gpx_url.lstrip('/'))
+
+    existing = [p for p in rel_paths if os.path.exists(os.path.join(ASTRO_REPO, p))]
+    if not existing:
+        logger.warning(f'discard_entry: none of {rel_paths} exist on disk, nothing to remove')
+        return
+
+    env = os.environ.copy()
+    env['GIT_SSH_COMMAND'] = 'ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=no'
+    subprocess.run(['git', 'rm', '-f', *existing], cwd=ASTRO_REPO, check=True, env=env)
+    subprocess.run(['git', 'commit', '-m', f'chore: discard staging entry {filename}'],
+                   cwd=ASTRO_REPO, check=True, env=env)
+    subprocess.run(['git', 'push', 'origin', 'main'], cwd=ASTRO_REPO, check=True, env=env)
+    logger.info(f'Discarded entry {filename} (git pushed)')
+
+    _npm(['run', 'build'], cwd=ASTRO_REPO)
+    _deploy_staging()
+    logger.info(f'Redeployed staging after discarding {filename}')
+
+    if also_production:
+        deploy_to_production()
+        logger.info(f'Redeployed production after discarding {filename}')
 
 
 def _deploy_staging():

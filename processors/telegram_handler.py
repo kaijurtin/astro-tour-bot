@@ -161,10 +161,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if message.text == '/golive':
+        last = context.user_data.get('last_published')
+        if not last:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text='ℹ️ Nothing published yet this session. Use /publish first.'
+            )
+            return
         await context.bot.send_message(chat_id=chat_id, text='🚀 Promoting staging to production...')
         try:
             from processors.blog_publisher import deploy_to_production
             deploy_to_production()
+            last['live'] = True
             await context.bot.send_message(
                 chat_id=chat_id,
                 text='✅ Live! https://jurtin.de/blog/'
@@ -172,6 +180,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f'Go-live error: {e}')
             await context.bot.send_message(chat_id=chat_id, text=f'❌ Go-live failed: {e}')
+        return
+
+    if message.text == '/delete' or message.text == '/discard':
+        last = context.user_data.get('last_published')
+        if not last:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text='ℹ️ Nothing to delete. This only works right after /publish (or /golive), in the same session.'
+            )
+            return
+        await context.bot.send_message(chat_id=chat_id, text='🗑️ Deleting entry and redeploying...')
+        try:
+            from processors.blog_publisher import discard_entry
+            discard_entry(
+                last['filename'], last['photo_urls'], last.get('gpx_url'),
+                also_production=last.get('live', False)
+            )
+            where = 'staging and production' if last.get('live') else 'staging'
+            await context.bot.send_message(chat_id=chat_id, text=f'✅ Entry removed from {where}.')
+            context.user_data['last_published'] = None
+        except Exception as e:
+            logger.error(f'Delete error: {e}')
+            await context.bot.send_message(chat_id=chat_id, text=f'❌ Delete failed: {e}')
         return
 
     if message.text in ('/start', '/help'):
@@ -184,7 +215,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 '/status — see what\'s collected so far\n'
                 '/publish — publish the current entry (to staging)\n'
                 '/cancel — discard the current entry\n'
-                '/golive — promote the current staging build to jurtin.de\n\n'
+                '/golive — promote the current staging build to jurtin.de\n'
+                '/delete — remove the last published entry (staging, or staging+production if already live)\n\n'
                 '*While an entry is open, send any of:*\n'
                 '📝 Text messages (your notes)\n'
                 '🎙️ Voice messages\n'
@@ -313,7 +345,13 @@ async def finalize_job(context: ContextTypes.DEFAULT_TYPE, job_data: dict):
             auto_published_at=entry_data['auto_published_at']
         )
 
-        await publish_blog_entry(job_id, job_record)
+        published = await publish_blog_entry(job_id, job_record)
+        context.user_data['last_published'] = {
+            'filename': published['filename'],
+            'photo_urls': published['photo_urls'],
+            'gpx_url': published['gpx_url'],
+            'live': False,
+        }
 
         n_photos = len(job_data.get('photos', []))
         n_audios = len(job_data.get('audios', []))
